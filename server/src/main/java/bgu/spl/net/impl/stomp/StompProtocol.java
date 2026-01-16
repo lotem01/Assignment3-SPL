@@ -2,14 +2,15 @@ package bgu.spl.net.impl.stomp;
 
 import java.util.HashMap;
 import java.util.Map;
-
+import java.util.concurrent.atomic.AtomicInteger;
 import bgu.spl.net.api.StompMessagingProtocol;
-import bgu.spl.net.srv.Connections;
 import bgu.spl.net.srv.ConnectionsImpl;
 
+
+//RECEIPT ID NEEDED TO BE ADDED - WHEN WORKING ON CLIENT IMPLEMENTATION
 public class StompProtocol implements StompMessagingProtocol<String> {
     private int connectionId;
-    private Connections<String> connections;
+    private ConnectionsImpl<String> connections;
     private boolean terminate = false;
     private final Map<String, String> subIdToChannel = new HashMap<>();
     private final Map<String, String> channelToSubId = new HashMap<>();
@@ -17,8 +18,10 @@ public class StompProtocol implements StompMessagingProtocol<String> {
     private String username = null;
     private String passcode = null;
 
+    private static final AtomicInteger msgId = new AtomicInteger(0);
+
     @Override
-    public void start(int connectionId, Connections<String> connections) {
+    public void start(int connectionId, ConnectionsImpl<String> connections) {
         this.connectionId = connectionId;
         this.connections = connections;
         this.terminate = false;
@@ -64,6 +67,7 @@ public class StompProtocol implements StompMessagingProtocol<String> {
             return;
         }
         String accept = null;
+        String receipt = null;
         for (String line : messageArr) {
             if (line.startsWith("login:")) {
                 this.username = line.substring(6);
@@ -71,6 +75,8 @@ public class StompProtocol implements StompMessagingProtocol<String> {
                 this.passcode = line.substring(9);
             } else if (line.startsWith("accept-version:")) {
                 accept = line.substring(15);
+            } else if (line.startsWith("receipt:")){
+                receipt = line.substring(8);
             }
         }
         if (accept == null || !accept.contains("1.2")) {
@@ -84,35 +90,170 @@ public class StompProtocol implements StompMessagingProtocol<String> {
             return;
         }
         this.loggedIn = true;
-        String response = "CONNECTED\nversion:1.2\n\n\u0000";
+        String response = "";
+        if(receipt != null)
+            response = "CONNECTED\nversion:1.2\nreceipt:" + receipt + "\n\n";
+        else
+            response = "CONNECTED\nversion:1.2\n\n";
         connections.send(connectionId, response);
 
     }
 
     public void processSubscribe(String[] messageArr) {
-        // IMPLEMENT IF NEEDED
+        if (!loggedIn) {
+            sendError("Not logged in");
+            connections.disconnect(connectionId);
+            return;
+        }
+        String destination = null;
+        String id = null;
+        for (String line : messageArr) {
+            if (line.startsWith("destination:")) {
+                destination = line.substring(12);
+            } else if (line.startsWith("id:")) {
+                id = line.substring(3);
+            }
+        }
+        if (destination == null || id == null) {
+            sendError("Missing destination or id");
+            connections.disconnect(connectionId);
+            return;
+        }
+        if (channelToSubId.containsKey(destination)) {
+            sendError("Already subscribed to destination");
+            connections.disconnect(connectionId);
+            return;
+        }
+
+        if (subIdToChannel.containsKey(id)) {
+            sendError("Subscription id already used");
+            connections.disconnect(connectionId);
+            return;
+        }
+        subIdToChannel.put(id, destination);
+        channelToSubId.put(destination, id);
+        connections.subscribe(connectionId, destination, id);
     }
 
     public void processUnsubscribe(String[] messageArr) {
-        // IMPLEMENT IF NEEDED
+        if (!loggedIn) {
+            sendError("Not logged in");
+            connections.disconnect(connectionId);
+            return;
+        }
+        String id = null;
+        for (String line : messageArr) {
+            if (line.startsWith("id:")) {
+                id = line.substring(3);
+            }
+        }
+        if (id == null) {
+            sendError("Missing id");
+            connections.disconnect(connectionId);
+            return;
+        }
+        if (!subIdToChannel.containsKey(id)) {
+            sendError("Subscription id not found");
+            connections.disconnect(connectionId);
+            return;
+        }
+        String destination = subIdToChannel.get(id);
+        connections.unsubscribe(connectionId, destination);
+        subIdToChannel.remove(id);
+        channelToSubId.remove(destination);
     }
 
     public void processSend(String[] messageArr) {
-        // IMPLEMENT IF NEEDED
+        if (!loggedIn) {
+            sendError("Not logged in");
+            connections.disconnect(connectionId);
+            return;
+        }
+        String receipt = null;
+        String destination = null;
+        String body = "";
+        boolean bodyStarted = false;
+
+        for (String line : messageArr) {
+            if (line.startsWith("destination:")) {
+                destination = line.substring(12);
+            } else if (line.isEmpty()) {
+                bodyStarted = true;
+            } else if (bodyStarted) {
+                body += line + "\n";
+            }
+            else if (line.startsWith("receipt:")){
+                receipt = line.substring(8);
+            }
+        }
+        if (destination == null) {
+            sendError("Missing destination");
+            connections.disconnect(connectionId);
+            return;
+        }
+        if (body.endsWith("\n")) {
+            body = body.substring(0, body.length() - 1);
+        }
+
+        Map<Integer, String> subs = connections.getSubscribers(destination);
+        if (subs == null)
+            return;
+
+        if (!connections.isSubscribed(connectionId, destination)) {
+            sendError("Not subscribed to destination");
+            connections.disconnect(connectionId);
+            return;
+        }
+        for (Map.Entry<Integer, String> e : subs.entrySet()) {
+            int id = e.getKey();
+            String subId = e.getValue();
+
+            String messageToSend = "MESSAGE\ndestination:" + destination +
+                    "\nsubscription:" + subId +
+                    "\nmessage-id:" + msgId.get() +
+                    "\n\n" + body;
+
+            connections.send(id, messageToSend);
+        }
+        msgId.incrementAndGet();
     }
 
     public void processDisconnect(String[] messageArr) {
-        // IMPLEMENT IF NEEDED
+        if (!loggedIn) {
+            sendError("Not logged in");
+            connections.disconnect(connectionId);
+            return;
+        }
+        String receiptId = null;
+        for (String line : messageArr) {
+            if (line.startsWith("receipt:")) {
+                receiptId = line.substring(8);
+            }
+        }
+        if (receiptId != null) {
+            String receiptMessage = "RECEIPT\nreceipt-id:" + receiptId + "\n\n";
+            connections.send(connectionId, receiptMessage);
+        } else {
+            sendError("Missing receipt id");
+            connections.disconnect(connectionId);
+            return;
+        }
+        for (String channel : channelToSubId.keySet()) {
+            connections.unsubscribe(connectionId, channel);
+        }
+        subIdToChannel.clear();
+        channelToSubId.clear();
+        terminate = true;
+        connections.disconnect(connectionId);
     }
 
-    public void sendError(String errorMessage) {
-        // IMPLEMENT IF NEEDED
-
+    public void sendError(String errorMessage) { // SEND RECEIPT ID??????
+        String errorResponse = "ERROR\nmessage:" + errorMessage + "\n\n";
+        connections.send(connectionId, errorResponse);
     }
 
     @Override
     public boolean shouldTerminate() {
-        // IMPLEMENT IF NEEDED
-        return false;
+        return terminate;
     }
 }
