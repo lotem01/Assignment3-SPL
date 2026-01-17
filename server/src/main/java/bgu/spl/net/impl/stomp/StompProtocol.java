@@ -34,7 +34,6 @@ public class StompProtocol implements StompMessagingProtocol<String> {
 
     @Override
     public void process(String message) {
-        // IMPLEMENT IF NEEDED
         String[] messageArr = message.split("\n");
         String command = messageArr[0];
         switch (command) {
@@ -53,17 +52,24 @@ public class StompProtocol implements StompMessagingProtocol<String> {
             case "DISCONNECT":
                 processDisconnect(messageArr);
                 break;
-            default:
-                sendError("Unknown command");
+            default: {
+                String receiptId = null;
+                for (String line : messageArr) {
+                    if (line.startsWith("receipt:")) receiptId = line.substring(8);
+                }
+                sendError("Unknown command", receiptId);
                 connections.disconnect(connectionId);
+                terminate = true;
                 break;
+            }
         }
     }
 
     public void processConnect(String[] messageArr) {
         if (loggedIn) {
-            sendError("Already logged in");
+            sendError("Already logged in", null);
             connections.disconnect(connectionId);
+            terminate = true;
             return;
         }
         String accept = null;
@@ -80,13 +86,15 @@ public class StompProtocol implements StompMessagingProtocol<String> {
             }
         }
         if (accept == null || !accept.contains("1.2")) {
-            sendError("Unsupported STOMP version (need 1.2)");
+            sendError("Unsupported STOMP version (need 1.2)", receipt);
             connections.disconnect(connectionId);
+            terminate = true;
             return;
         }
         if (this.username == null || this.username.isEmpty() || this.passcode == null) {
-            sendError("Missing login/passcode");
+            sendError("Missing login/passcode", receipt);
             connections.disconnect(connectionId);
+            terminate = true;
             return;
         }
         this.loggedIn = true;
@@ -101,8 +109,9 @@ public class StompProtocol implements StompMessagingProtocol<String> {
 
     public void processSubscribe(String[] messageArr) {
         if (!loggedIn) {
-            sendError("Not logged in");
+            sendError("Not logged in", null);
             connections.disconnect(connectionId);
+            terminate = true;
             return;
         }
         String destination = null;
@@ -115,19 +124,22 @@ public class StompProtocol implements StompMessagingProtocol<String> {
             }
         }
         if (destination == null || id == null) {
-            sendError("Missing destination or id");
+            sendError("Missing destination or id", null);
             connections.disconnect(connectionId);
+            terminate = true;
             return;
         }
         if (channelToSubId.containsKey(destination)) {
-            sendError("Already subscribed to destination");
+            sendError("Already subscribed to destination", null);
             connections.disconnect(connectionId);
+            terminate = true;
             return;
         }
 
         if (subIdToChannel.containsKey(id)) {
-            sendError("Subscription id already used");
+            sendError("Subscription id already used", null);
             connections.disconnect(connectionId);
+            terminate = true;
             return;
         }
         subIdToChannel.put(id, destination);
@@ -137,7 +149,7 @@ public class StompProtocol implements StompMessagingProtocol<String> {
 
     public void processUnsubscribe(String[] messageArr) {
         if (!loggedIn) {
-            sendError("Not logged in");
+            sendError("Not logged in", null);
             connections.disconnect(connectionId);
             return;
         }
@@ -148,13 +160,14 @@ public class StompProtocol implements StompMessagingProtocol<String> {
             }
         }
         if (id == null) {
-            sendError("Missing id");
+            sendError("Missing id", null);
             connections.disconnect(connectionId);
             return;
         }
         if (!subIdToChannel.containsKey(id)) {
-            sendError("Subscription id not found");
+            sendError("Subscription id not found", null);
             connections.disconnect(connectionId);
+            terminate = true;
             return;
         }
         String destination = subIdToChannel.get(id);
@@ -165,8 +178,9 @@ public class StompProtocol implements StompMessagingProtocol<String> {
 
     public void processSend(String[] messageArr) {
         if (!loggedIn) {
-            sendError("Not logged in");
+            sendError("Not logged in", null);
             connections.disconnect(connectionId);
+            terminate = true;
             return;
         }
         String receipt = null;
@@ -187,8 +201,9 @@ public class StompProtocol implements StompMessagingProtocol<String> {
             }
         }
         if (destination == null) {
-            sendError("Missing destination");
+            sendError("Missing destination", receipt);
             connections.disconnect(connectionId);
+            terminate = true;
             return;
         }
         if (body.endsWith("\n")) {
@@ -200,8 +215,9 @@ public class StompProtocol implements StompMessagingProtocol<String> {
             return;
 
         if (!connections.isSubscribed(connectionId, destination)) {
-            sendError("Not subscribed to destination");
+            sendError("Not subscribed to destination", receipt);
             connections.disconnect(connectionId);
+            terminate = true;
             return;
         }
         for (Map.Entry<Integer, String> e : subs.entrySet()) {
@@ -220,8 +236,9 @@ public class StompProtocol implements StompMessagingProtocol<String> {
 
     public void processDisconnect(String[] messageArr) {
         if (!loggedIn) {
-            sendError("Not logged in");
+            sendError("Not logged in", null);
             connections.disconnect(connectionId);
+            terminate = true;
             return;
         }
         String receiptId = null;
@@ -234,8 +251,9 @@ public class StompProtocol implements StompMessagingProtocol<String> {
             String receiptMessage = "RECEIPT\nreceipt-id:" + receiptId + "\n\n";
             connections.send(connectionId, receiptMessage);
         } else {
-            sendError("Missing receipt id");
+            sendError("Missing receipt id", receiptId);
             connections.disconnect(connectionId);
+            terminate = true;
             return;
         }
         for (String channel : channelToSubId.keySet()) {
@@ -247,9 +265,14 @@ public class StompProtocol implements StompMessagingProtocol<String> {
         connections.disconnect(connectionId);
     }
 
-    public void sendError(String errorMessage) { // SEND RECEIPT ID??????
-        String errorResponse = "ERROR\nmessage:" + errorMessage + "\n\n";
-        connections.send(connectionId, errorResponse);
+    public void sendError(String errorMessage, String receiptId) { // SEND RECEIPT ID??????
+        if(receiptId != null) {
+            String errorResponse = "ERROR\nmessage:" + errorMessage + "\nreceipt-id:" + receiptId + "\n\n";
+            connections.send(connectionId, errorResponse);
+        } else {
+            String errorResponse = "ERROR\nmessage:" + errorMessage + "\n\n";
+            connections.send(connectionId, errorResponse);
+        }
     }
 
     @Override
