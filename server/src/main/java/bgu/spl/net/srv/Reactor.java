@@ -1,7 +1,7 @@
 package bgu.spl.net.srv;
 
-import bgu.spl.net.api.MessageEncoderDecoder;
-import bgu.spl.net.api.MessagingProtocol;
+import bgu.spl.net.impl.stomp.StompEncoderDecoder;
+import bgu.spl.net.api.StompMessagingProtocol;
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.nio.channels.ClosedSelectorException;
@@ -15,8 +15,8 @@ import java.util.function.Supplier;
 public class Reactor<T> implements Server<T> {
 
     private final int port;
-    private final Supplier<MessagingProtocol<T>> protocolFactory;
-    private final Supplier<MessageEncoderDecoder<T>> readerFactory;
+    private final Supplier<StompMessagingProtocol<T>> protocolFactory;
+    private final Supplier<StompEncoderDecoder> readerFactory;
     private final ActorThreadPool pool;
     private Selector selector;
 
@@ -26,8 +26,8 @@ public class Reactor<T> implements Server<T> {
     public Reactor(
             int numThreads,
             int port,
-            Supplier<MessagingProtocol<T>> protocolFactory,
-            Supplier<MessageEncoderDecoder<T>> readerFactory) {
+            Supplier<StompMessagingProtocol<T>> protocolFactory,
+            Supplier<StompEncoderDecoder> readerFactory) {
 
         this.pool = new ActorThreadPool(numThreads);
         this.port = port;
@@ -97,7 +97,7 @@ public class Reactor<T> implements Server<T> {
         clientChan.configureBlocking(false);
         final NonBlockingConnectionHandler<T> handler = new NonBlockingConnectionHandler<>(
                 readerFactory.get(),
-                protocolFactory.get(),
+                (StompMessagingProtocol<String>) protocolFactory.get(),
                 clientChan,
                 this);
         clientChan.register(selector, SelectionKey.OP_READ, handler);
@@ -105,7 +105,8 @@ public class Reactor<T> implements Server<T> {
 
     private void handleReadWrite(SelectionKey key) {
         @SuppressWarnings("unchecked")
-        NonBlockingConnectionHandler<T> handler = (NonBlockingConnectionHandler<T>) key.attachment();
+        NonBlockingConnectionHandler<String> handler = (NonBlockingConnectionHandler<String>) key.attachment();
+        
 
         if (key.isReadable()) {
             Runnable task = handler.continueRead();

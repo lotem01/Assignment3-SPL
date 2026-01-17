@@ -5,19 +5,26 @@ import bgu.spl.net.api.MessagingProtocol;
 import java.io.IOException;
 import java.net.ServerSocket;
 import java.net.Socket;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Supplier;
+import bgu.spl.net.api.StompMessagingProtocol;
+import bgu.spl.net.impl.stomp.StompEncoderDecoder;
+
 
 public abstract class BaseServer<T> implements Server<T> {
 
     private final int port;
-    private final Supplier<MessagingProtocol<T>> protocolFactory;
-    private final Supplier<MessageEncoderDecoder<T>> encdecFactory;
+    private final Supplier<StompMessagingProtocol<T>> protocolFactory;
+    private final Supplier<StompEncoderDecoder> encdecFactory;
     private ServerSocket sock;
+
+    private final ConnectionsImpl<T> connections = new ConnectionsImpl<>();
+    private final AtomicInteger nextId = new AtomicInteger(0);
 
     public BaseServer(
             int port,
-            Supplier<MessagingProtocol<T>> protocolFactory,
-            Supplier<MessageEncoderDecoder<T>> encdecFactory) {
+            Supplier<StompMessagingProtocol<T>> protocolFactory,
+            Supplier<StompEncoderDecoder> encdecFactory) {
 
         this.port = port;
         this.protocolFactory = protocolFactory;
