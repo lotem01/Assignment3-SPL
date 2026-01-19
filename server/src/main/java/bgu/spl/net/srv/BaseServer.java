@@ -18,8 +18,8 @@ public abstract class BaseServer<T> implements Server<T> {
     private final Supplier<StompEncoderDecoder> encdecFactory;
     private ServerSocket sock;
 
-    private final ConnectionsImpl<T> connections = new ConnectionsImpl<>();
-    private final AtomicInteger nextId = new AtomicInteger(0);
+    protected final ConnectionsImpl<T> connections = new ConnectionsImpl<>();
+    protected final AtomicInteger nextId = new AtomicInteger(0);
 
     public BaseServer(
             int port,
@@ -48,6 +48,10 @@ public abstract class BaseServer<T> implements Server<T> {
                         clientSock,
                         encdecFactory.get(),
                         protocolFactory.get());
+
+                int connectionId = nextId.getAndIncrement();
+                connections.addConnection(connectionId, handler);
+                handler.start(connectionId, connections);
 
                 execute(handler);
             }
