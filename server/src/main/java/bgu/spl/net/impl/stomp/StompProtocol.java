@@ -1,7 +1,9 @@
 package bgu.spl.net.impl.stomp;
 
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
 import bgu.spl.net.api.StompMessagingProtocol;
 import bgu.spl.net.srv.ConnectionsImpl;
@@ -9,7 +11,6 @@ import bgu.spl.net.impl.data.Database;
 import bgu.spl.net.impl.data.LoginStatus;
 
 
-//RECEIPT ID NEEDED TO BE ADDED - WHEN WORKING ON CLIENT IMPLEMENTATION
 public class StompProtocol implements StompMessagingProtocol<String> {
     private int connectionId;
     private ConnectionsImpl<String> connections;
@@ -20,6 +21,7 @@ public class StompProtocol implements StompMessagingProtocol<String> {
     private String username = null;
     private String passcode = null;
     private final Database database = Database.getInstance();
+    private final Set<String> reportedFiles = new HashSet<>();
 
     private static final AtomicInteger msgId = new AtomicInteger(0);
 
@@ -30,6 +32,7 @@ public class StompProtocol implements StompMessagingProtocol<String> {
         this.terminate = false;
         this.subIdToChannel.clear();
         this.channelToSubId.clear();
+        this.reportedFiles.clear();
         this.loggedIn = false;
         this.username = null;
         this.passcode = null;
@@ -272,7 +275,10 @@ public class StompProtocol implements StompMessagingProtocol<String> {
         }
         msgId.incrementAndGet();
         if (file != null) {
-            database.trackFileUpload(username, file, destination);
+            String fileKey = username + "\n" + destination + "\n" + file;
+            if (reportedFiles.add(fileKey)) {
+                database.trackFileUpload(username, file, destination);
+            }
         }
         if (receipt != null)
             sendReceipt(receipt);
