@@ -19,6 +19,8 @@ public class Reactor<T> implements Server<T> {
     private final Supplier<StompEncoderDecoder> readerFactory;
     private final ActorThreadPool pool;
     private Selector selector;
+    private final ConnectionsImpl<String> connections = new ConnectionsImpl<>();
+    private final java.util.concurrent.atomic.AtomicInteger nextId = new java.util.concurrent.atomic.AtomicInteger(0);
 
     private Thread selectorThread;
     private final ConcurrentLinkedQueue<Runnable> selectorTasks = new ConcurrentLinkedQueue<>();
@@ -100,6 +102,9 @@ public class Reactor<T> implements Server<T> {
                 (StompMessagingProtocol<String>) protocolFactory.get(),
                 clientChan,
                 this);
+        int connectionId = nextId.getAndIncrement();
+        connections.addConnection(connectionId, (ConnectionHandler<String>) handler);
+        handler.start(connectionId, connections);
         clientChan.register(selector, SelectionKey.OP_READ, handler);
     }
 
