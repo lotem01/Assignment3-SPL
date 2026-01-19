@@ -66,6 +66,9 @@ public class ConnectionsImpl<T> implements Connections<T> {
 
         if (h != null) {
             try {
+                if (h instanceof NonBlockingConnectionHandler) {
+                    return;
+                }
                 h.close();
             } catch (IOException ignored) {}
         }
