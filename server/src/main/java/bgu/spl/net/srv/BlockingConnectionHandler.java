@@ -22,6 +22,10 @@ public class BlockingConnectionHandler<T> implements Runnable, ConnectionHandler
         this.protocol = protocol;
     }
 
+    public void start(int connectionId, ConnectionsImpl<T> connections) {
+        protocol.start(connectionId, connections);
+    }
+
     @Override
     public void run() {
         try (Socket sock = this.sock) { //just for automatic closing

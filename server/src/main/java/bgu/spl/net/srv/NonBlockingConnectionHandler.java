@@ -32,6 +32,10 @@ public class NonBlockingConnectionHandler<T> implements ConnectionHandler<String
         this.reactor = reactor;
     }
 
+    public void start(int connectionId, ConnectionsImpl<String> connections) {
+        protocol.start(connectionId, connections);
+    }
+
     public Runnable continueRead() {
         ByteBuffer buf = leaseBuffer();
 
