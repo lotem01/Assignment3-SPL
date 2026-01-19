@@ -21,6 +21,7 @@ namespace
 
 	struct ParsedFrame
 	{
+		ParsedFrame() : command(), headers(), body() {}
 		std::string command;
 		std::map<std::string, std::string> headers;
 		std::string body;
@@ -28,11 +29,23 @@ namespace
 
 	struct ReportEvent
 	{
+		ReportEvent()
+			: user(),
+			  team_a(),
+			  team_b(),
+			  event_name(),
+			  time(0),
+			  general_updates(),
+			  team_a_updates(),
+			  team_b_updates(),
+			  description()
+		{
+		}
 		std::string user;
 		std::string team_a;
 		std::string team_b;
 		std::string event_name;
-		int time = 0;
+		int time;
 		std::map<std::string, std::string> general_updates;
 		std::map<std::string, std::string> team_a_updates;
 		std::map<std::string, std::string> team_b_updates;
@@ -41,23 +54,35 @@ namespace
 
 	struct StoredEvent
 	{
-		int time = 0;
+		StoredEvent() : time(0), name(), description(), half_index(0), seq(0) {}
+		int time;
 		std::string name;
 		std::string description;
-		int half_index = 0;
-		int seq = 0;
+		int half_index;
+		int seq;
 	};
 
 	struct GameUserData
 	{
+		GameUserData()
+			: team_a(),
+			  team_b(),
+			  general_stats(),
+			  team_a_stats(),
+			  team_b_stats(),
+			  events(),
+			  halftime_occurred(false),
+			  seq_counter(0)
+		{
+		}
 		std::string team_a;
 		std::string team_b;
 		std::map<std::string, std::string> general_stats;
 		std::map<std::string, std::string> team_a_stats;
 		std::map<std::string, std::string> team_b_stats;
 		std::vector<StoredEvent> events;
-		bool halftime_occurred = false;
-		int seq_counter = 0;
+		bool halftime_occurred;
+		int seq_counter;
 	};
 
 	enum class ReceiptType
@@ -69,23 +94,45 @@ namespace
 
 	struct ReceiptAction
 	{
+		ReceiptAction() : type(ReceiptType::Join), game() {}
+		ReceiptAction(ReceiptType type_in, const std::string &game_in)
+			: type(type_in), game(game_in)
+		{
+		}
 		ReceiptType type;
 		std::string game;
 	};
 
 	struct ClientState
 	{
+		ClientState()
+			: mutex(),
+			  cv(),
+			  handler(nullptr),
+			  listener(),
+			  running(false),
+			  connected(false),
+			  logged_in(false),
+			  logout_in_progress(false),
+			  username(),
+			  next_sub_id(1),
+			  next_receipt_id(1),
+			  game_to_sub_id(),
+			  receipt_actions(),
+			  game_user_data()
+		{
+		}
 		std::mutex mutex;
 		std::condition_variable cv;
 		std::unique_ptr<ConnectionHandler> handler;
 		std::thread listener;
-		std::atomic<bool> running{false};
-		bool connected = false;
-		bool logged_in = false;
-		bool logout_in_progress = false;
+		std::atomic<bool> running;
+		bool connected;
+		bool logged_in;
+		bool logout_in_progress;
 		std::string username;
-		int next_sub_id = 1;
-		int next_receipt_id = 1;
+		int next_sub_id;
+		int next_receipt_id;
 		std::map<std::string, int> game_to_sub_id;
 		std::map<int, ReceiptAction> receipt_actions;
 		std::map<std::string, std::map<std::string, GameUserData>> game_user_data;
@@ -413,6 +460,23 @@ namespace
 		return frame;
 	}
 
+	std::string build_send_frame_with_file(const std::string &game, const std::string &file, const std::string &body)
+	{
+		std::string frame;
+		frame += "SEND\ndestination:" + game + "\nfile:" + file + "\n\n" + body;
+		return frame;
+	}
+
+	std::string basename_from_path(const std::string &path)
+	{
+		size_t pos = path.find_last_of("/\\");
+		if (pos > path.size())
+		{
+			return path;
+		}
+		return path.substr(pos + 1);
+	}
+
 	void print_line(const std::string &line)
 	{
 		std::unique_lock<std::mutex> lock(cout_mutex);
@@ -691,7 +755,7 @@ int StompClient::run()
 			sub_id = state.next_sub_id++;
 			receipt_id = state.next_receipt_id++;
 			state.game_to_sub_id[game] = sub_id;
-			state.receipt_actions[receipt_id] = {ReceiptType::Join, game};
+			state.receipt_actions[receipt_id] = ReceiptAction(ReceiptType::Join, game);
 			lock1.unlock();
 			std::string frame = build_subscribe_frame(game, sub_id, receipt_id);
 			send_frame(state, frame);
@@ -722,7 +786,7 @@ int StompClient::run()
 			sub_id = it->second;
 			state.game_to_sub_id.erase(it);
 			receipt_id = state.next_receipt_id++;
-			state.receipt_actions[receipt_id] = {ReceiptType::Exit, game};
+			state.receipt_actions[receipt_id] = ReceiptAction(ReceiptType::Exit, game);
 			lock1.unlock();
 			std::string frame = build_unsubscribe_frame(sub_id, receipt_id);
 			send_frame(state, frame);
@@ -758,10 +822,11 @@ int StompClient::run()
 			}
 			lock1.unlock();
 
+			std::string file_name = basename_from_path(file_path);
 			for (const auto &event : nne.events)
 			{
 				std::string body = build_report_body(user, event);
-				std::string frame = build_send_frame(game, body);
+				std::string frame = build_send_frame_with_file(game, file_name, body);
 				send_frame(state, frame);
 
 				ReportEvent report;
@@ -884,7 +949,7 @@ int StompClient::run()
 			}
 			state.logout_in_progress = true;
 			receipt_id = state.next_receipt_id++;
-			state.receipt_actions[receipt_id] = {ReceiptType::Logout, ""};
+			state.receipt_actions[receipt_id] = ReceiptAction(ReceiptType::Logout, "");
 			lock1.unlock();
 			std::string frame = build_disconnect_frame(receipt_id);
 			send_frame(state, frame);
