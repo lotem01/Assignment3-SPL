@@ -5,6 +5,8 @@ import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
 import bgu.spl.net.api.StompMessagingProtocol;
 import bgu.spl.net.srv.ConnectionsImpl;
+import bgu.spl.net.impl.data.Database;
+import bgu.spl.net.impl.data.LoginStatus;
 
 
 //RECEIPT ID NEEDED TO BE ADDED - WHEN WORKING ON CLIENT IMPLEMENTATION
@@ -17,6 +19,7 @@ public class StompProtocol implements StompMessagingProtocol<String> {
     private boolean loggedIn = false;
     private String username = null;
     private String passcode = null;
+    private final Database database = Database.getInstance();
 
     private static final AtomicInteger msgId = new AtomicInteger(0);
 
@@ -74,11 +77,13 @@ public class StompProtocol implements StompMessagingProtocol<String> {
         }
         String accept = null;
         String receipt = null;
+        String login = null;
+        String pass = null;
         for (String line : messageArr) {
             if (line.startsWith("login:")) {
-                this.username = line.substring(6);
+                login = line.substring(6);
             } else if (line.startsWith("passcode:")) {
-                this.passcode = line.substring(9);
+                pass = line.substring(9);
             } else if (line.startsWith("accept-version:")) {
                 accept = line.substring(15);
             } else if (line.startsWith("receipt:")){
@@ -91,19 +96,37 @@ public class StompProtocol implements StompMessagingProtocol<String> {
             terminate = true;
             return;
         }
-        if (this.username == null || this.username.isEmpty() || this.passcode == null) {
+        if (login == null || login.isEmpty() || pass == null) {
             sendError("Missing login/passcode", receipt);
             connections.disconnect(connectionId);
             terminate = true;
             return;
         }
+        LoginStatus status = database.login(connectionId, login, pass);
+        if (status == LoginStatus.ALREADY_LOGGED_IN) {
+            sendError("User already logged in", receipt);
+            connections.disconnect(connectionId);
+            terminate = true;
+            return;
+        }
+        if (status == LoginStatus.WRONG_PASSWORD) {
+            sendError("Wrong password", receipt);
+            connections.disconnect(connectionId);
+            terminate = true;
+            return;
+        }
+        if (status == LoginStatus.CLIENT_ALREADY_CONNECTED) {
+            sendError("Client already connected", receipt);
+            connections.disconnect(connectionId);
+            terminate = true;
+            return;
+        }
+        this.username = login;
+        this.passcode = pass;
         this.loggedIn = true;
-        String response = "";
-        if(receipt != null)
-            response = "CONNECTED\nversion:1.2\nreceipt:" + receipt + "\n\n";
-        else
-            response = "CONNECTED\nversion:1.2\n\n";
-        connections.send(connectionId, response);
+        connections.send(connectionId, "CONNECTED\nversion:1.2\n\n");
+        if (receipt != null)
+            sendReceipt(receipt);
 
     }
 
@@ -116,11 +139,14 @@ public class StompProtocol implements StompMessagingProtocol<String> {
         }
         String destination = null;
         String id = null;
+        String receipt = null;
         for (String line : messageArr) {
             if (line.startsWith("destination:")) {
                 destination = line.substring(12);
             } else if (line.startsWith("id:")) {
                 id = line.substring(3);
+            } else if (line.startsWith("receipt:")) {
+                receipt = line.substring(8);
             }
         }
         if (destination == null || id == null) {
@@ -145,6 +171,8 @@ public class StompProtocol implements StompMessagingProtocol<String> {
         subIdToChannel.put(id, destination);
         channelToSubId.put(destination, id);
         connections.subscribe(connectionId, destination, id);
+        if (receipt != null)
+            sendReceipt(receipt);
     }
 
     public void processUnsubscribe(String[] messageArr) {
@@ -154,9 +182,12 @@ public class StompProtocol implements StompMessagingProtocol<String> {
             return;
         }
         String id = null;
+        String receipt = null;
         for (String line : messageArr) {
             if (line.startsWith("id:")) {
                 id = line.substring(3);
+            } else if (line.startsWith("receipt:")) {
+                receipt = line.substring(8);
             }
         }
         if (id == null) {
@@ -174,6 +205,8 @@ public class StompProtocol implements StompMessagingProtocol<String> {
         connections.unsubscribe(connectionId, destination);
         subIdToChannel.remove(id);
         channelToSubId.remove(destination);
+        if (receipt != null)
+            sendReceipt(receipt);
     }
 
     public void processSend(String[] messageArr) {
@@ -185,19 +218,25 @@ public class StompProtocol implements StompMessagingProtocol<String> {
         }
         String receipt = null;
         String destination = null;
+        String file = null;
         String body = "";
         boolean bodyStarted = false;
 
         for (String line : messageArr) {
             if (line.startsWith("destination:")) {
                 destination = line.substring(12);
+            } else if (line.startsWith("receipt:")){
+                receipt = line.substring(8);
+            } else if (line.startsWith("file:")) {
+                file = line.substring(5);
             } else if (line.isEmpty()) {
-                bodyStarted = true;
+                if (bodyStarted) {
+                    body += "\n";
+                } else {
+                    bodyStarted = true;
+                }
             } else if (bodyStarted) {
                 body += line + "\n";
-            }
-            else if (line.startsWith("receipt:")){
-                receipt = line.substring(8);
             }
         }
         if (destination == null) {
@@ -232,6 +271,11 @@ public class StompProtocol implements StompMessagingProtocol<String> {
             connections.send(id, messageToSend);
         }
         msgId.incrementAndGet();
+        if (file != null) {
+            database.trackFileUpload(username, file, destination);
+        }
+        if (receipt != null)
+            sendReceipt(receipt);
     }
 
     public void processDisconnect(String[] messageArr) {
@@ -262,6 +306,7 @@ public class StompProtocol implements StompMessagingProtocol<String> {
         subIdToChannel.clear();
         channelToSubId.clear();
         terminate = true;
+        database.logout(connectionId);
         connections.disconnect(connectionId);
     }
 
@@ -273,6 +318,11 @@ public class StompProtocol implements StompMessagingProtocol<String> {
             String errorResponse = "ERROR\nmessage:" + errorMessage + "\n\n";
             connections.send(connectionId, errorResponse);
         }
+    }
+
+    private void sendReceipt(String receiptId) {
+        String receiptMessage = "RECEIPT\nreceipt-id:" + receiptId + "\n\n";
+        connections.send(connectionId, receiptMessage);
     }
 
     @Override
